@@ -935,6 +935,43 @@ def test_invalid_smiles(smiles, error_type):
         read_smiles(smiles)
 
 
+def test_bare_bracket_hcount_inference_is_opt_in():
+    with pytest.raises(KeyError):
+        read_smiles('[C]')
+
+    found = read_smiles('[C]', infer_bare_bracket_hcount=True)
+
+    assert found.nodes[0]['_atom_str'] == '[C]'
+    assert found.nodes[0]['element'] == 'C'
+    assert found.nodes[0]['hcount'] == 4
+
+
+def test_bare_bracket_hcount_inference_handles_terminal_atoms():
+    found = read_smiles('C([C])([C])[C]', infer_bare_bracket_hcount=True)
+
+    assert [found.nodes[node]['_atom_str'] for node in found] == ['C', '[C]', '[C]', '[C]']
+    assert [found.nodes[node]['hcount'] for node in found] == [1, 3, 3, 3]
+
+
+def test_bare_bracket_hcount_inference_does_not_repair_explicit_forms():
+    found = read_smiles('[CH4]', infer_bare_bracket_hcount=True)
+
+    assert found.nodes[0]['_atom_str'] == '[CH4]'
+    assert found.nodes[0]['hcount'] == 4
+    with pytest.raises(KeyError):
+        read_smiles('[N+]', infer_bare_bracket_hcount=True)
+
+
+def test_ignore_invalid_ez_is_opt_in():
+    with pytest.raises(ValueError):
+        read_smiles('F/C=CF')
+
+    found = read_smiles('F/C=CF', ignore_invalid_ez=True)
+
+    assert len(nx.get_node_attributes(found, 'ez_isomer')) == 0
+    assert len(found.nodes) == 4
+
+
 @pytest.mark.parametrize('smiles,expected', [
     ('N[C@](Br)(O)C', 'N Br O C'),
     ('Br[C@](O)(N)C', 'Br O N C'),

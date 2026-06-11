@@ -31,6 +31,17 @@ from .write_smiles import write_smiles_component
 
 LOGGER = logging.getLogger(__name__)
 
+BARE_BRACKET_ORGANIC_ATOMS = {'[B]', '[C]', '[N]', '[O]', '[P]', '[S]',
+                              '[F]', '[Cl]', '[Br]', '[I]'}
+EZ_ANNOTATION_ERROR_PREFIXES = (
+    'Dangling E/Z isomer token',
+    'Conflicting cis/trans assignment',
+)
+
+
+def _is_ez_annotation_error(error):
+    return str(error).startswith(EZ_ANNOTATION_ERROR_PREFIXES)
+
 
 @enum.unique
 class TokenType(enum.Enum):
@@ -212,8 +223,9 @@ def base_smiles_parser(smiles, strict=True, node_attr='desc', edge_attr='desc'):
 
     return mol, ez_isomer_atoms, created_ring_bonds
 
-def read_smiles(smiles, explicit_hydrogen=False, zero_order_bonds=True, 
-                reinterpret_aromatic=True, strict=True):
+def read_smiles(smiles, explicit_hydrogen=False, zero_order_bonds=True,
+                reinterpret_aromatic=True, strict=True,
+                infer_bare_bracket_hcount=False, ignore_invalid_ez=False):
     """
     Parses a SMILES string.
 
@@ -234,6 +246,12 @@ def read_smiles(smiles, explicit_hydrogen=False, zero_order_bonds=True,
     strict : bool
         Whether to be more strict in accepting what is a valid SMILES string and
         what is not.
+    infer_bare_bracket_hcount : bool
+        Whether bare bracket organic-subset atoms such as ``[C]`` and ``[N]``
+        should infer implicit hydrogen counts like their unbracketed forms.
+    ignore_invalid_ez : bool
+        Whether invalid E/Z annotations should be ignored after connectivity
+        parsing, returning the 2D graph without E/Z node annotations.
 
     Returns
     -------
@@ -250,7 +268,11 @@ def read_smiles(smiles, explicit_hydrogen=False, zero_order_bonds=True,
     mol, ez_isomer_atoms, ring_bonds = base_smiles_parser(smiles, strict=strict,
                                                           node_attr='_atom_str', edge_attr='_bond_str')
     for node in mol:
-        mol.nodes[node].update(parse_atom(mol.nodes[node]['_atom_str']))
+        atom_str = mol.nodes[node]['_atom_str']
+        atom_attrs = parse_atom(atom_str)
+        if infer_bare_bracket_hcount and atom_str in BARE_BRACKET_ORGANIC_ATOMS:
+            atom_attrs.pop('hcount', None)
+        mol.nodes[node].update(atom_attrs)
     for idx, jdx, attrs in ring_bonds:
         if mol.nodes[idx].get('rs_isomer'):
             mol.nodes[idx]['rs_isomer'][1].append(jdx)
@@ -311,7 +333,14 @@ def read_smiles(smiles, explicit_hydrogen=False, zero_order_bonds=True,
                 LOGGER.warning(msg)
 
     # post-processing of E/Z isomerism
-    _annotate_ez_isomers(mol, ez_isomer_atoms)
+    try:
+        _annotate_ez_isomers(mol, ez_isomer_atoms)
+    except ValueError as error:
+        if not ignore_invalid_ez or not _is_ez_annotation_error(error):
+            raise
+        LOGGER.warning('Ignoring invalid E/Z annotations in %s: %s', smiles, error)
+        for node in mol:
+            mol.nodes[node].pop('ez_isomer', None)
     # post-processing of chiral atoms
     _mark_chiral_atoms(mol)
 
